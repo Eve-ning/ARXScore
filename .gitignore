@@ -3,5 +3,5 @@
 *.osu
 *.pyc
 models/
-rsc/
+_rsc/
 scratch*
