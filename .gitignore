@@ -1,0 +1,7 @@
+.idea/
+*.osr
+*.osu
+*.pyc
+models/
+rsc/
+scratch*
