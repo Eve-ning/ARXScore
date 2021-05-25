@@ -1,29 +1,55 @@
+from collections import Callable
 from dataclasses import dataclass
 from os import walk
 
 import numpy as np
 import pandas as pd
+from _lzma import LZMAError
 from reamber.osu import OsuMap
-from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-from osrparse import Replay, parse_replay_file
+from consts import CONSTS
+from osrparse import parse_replay_file
 from osrparse.mania import ManiaHitError
 
 
 @dataclass
 class Input:
 
-    threshold: int = 200
-    window_ms: float = 1000
+    """ Inputs
+
+    Threshold is the look around threshold, that means, how much ms to look around to find related patterns.
+
+    Window is the rolling window aggregation. this defines how precise the rolling should be.
+
+    Aggregation is called upon the errors received by load_from, this will give you different shapes depending on this.
+
+    """
+    threshold: int = CONSTS.THRESHOLD
+    window_ms: float = CONSTS.WINDOW
+    aggregated: bool = False
+    aggregation_method: Callable = np.median
 
     def load_from(self, map_str):
-        _, _, filenames = next(walk(f"rsc/{map_str}/rep/"))
-        reps = [parse_replay_file(f"rsc/{map_str}/rep/{f}") for f in filenames]
-        map = OsuMap.readFile(f"rsc/{map_str}/{map_str}.osu")
-        return self.create_data(reps, map)
+        """ This will load a map and replays and create the features from it.
 
-    def create_data(self, reps, map):
+        Note that the features are affected by aggregated and aggregation_method.
+
+        If aggregated is False, you will receive output of the individual key errors on hit and release,
+        else you'd get an aggregated column of those.
+        """
+        map_path = f"{CONSTS.RSC_PATH}/{map_str}"
+        _, _, filenames = next(walk(f"{map_path}/{CONSTS.REP_NAME}/"))
+        reps = []
+        for f in filenames:
+            try:
+                reps.append(parse_replay_file(f"{map_path}/{CONSTS.REP_NAME}/{f}"))
+            except LZMAError:
+                print(f"Detected bad Replay on {f}")
+        map = OsuMap.readFile(f"{map_path}/{map_str}.osu")
+        return self._create_data(reps, map)
+
+    def _create_data(self, reps, map):
         errors = ManiaHitError(reps, map).errors()
 
         map = [*[np.asarray(h) for h in errors.hit_map],
@@ -34,7 +60,11 @@ class Input:
         )
         if reps:
             df_rep_error = self._rep_error(errors, self.window_ms)
+            if self.aggregated:
+                df_rep_error = pd.DataFrame(self.aggregation_method(df_rep_error,axis=1),
+                                            index=df_rep_error.index)
             df = pd.concat([df_map_features, df_rep_error], axis=1)
+
         else:
             df = df_map_features
 
@@ -54,17 +84,23 @@ class Input:
         for rep_hit_error, rep_rel_error in zip(errors.hit_errors, errors.rel_errors):
             rep_errors.append([*[e for k in rep_hit_error for e in k],
                                *[e for k in rep_rel_error for e in k]])
-        ar_error = np.asarray(rep_errors, dtype=int)
 
-        map_hit = [e for k in errors.hit_map for e in k]
-        map_rel = [e for k in errors.rel_map for e in k]
-        ar_map = np.asarray([*map_hit, *map_rel])
-        df_error = pd.DataFrame(np.abs(ar_error.transpose()), index=ar_map)
-        df_error = df_error.sort_index()
-        df_error.index = pd.to_datetime(df_error.index, unit='ms')
+        keys = len(errors.hit_map)
+        error_k = []
+        for k in range(keys):
+            df = pd.DataFrame(np.asarray([e[k] for e in errors.hit_errors]).transpose(),
+                         index=errors.hit_map[k])
+            df.index = pd.to_datetime(df.index, unit='ms')
+            df = df.groupby(pd.Grouper(freq=f'{window_ms}ms')).sum()
+            error_k.append(df.mean(axis=1))
 
-        df_error = df_error.groupby(pd.Grouper(freq=f'{window_ms}ms')).sum()
-        return Input._std(df_error)
+            df = pd.DataFrame(np.asarray([e[k] for e in errors.rel_errors]).transpose(),
+                         index=errors.rel_map[k])
+            df.index = pd.to_datetime(df.index, unit='ms')
+            df = df.groupby(pd.Grouper(freq=f'{window_ms}ms')).sum()
+            error_k.append(df.mean(axis=1))
+
+        return Input._std(pd.concat(error_k,axis=1))
 
     @staticmethod
     def _map_features(map, window_ms, threshold):
@@ -87,4 +123,4 @@ class Input:
             diffs.append(b)
         df = pd.concat(diffs, axis=1)
         df = df.fillna(0)
-        return df
+        return Input._std(df)
