@@ -1,3 +1,3 @@
-from model.lstm_model import LSTMModel
+from model.xgboost_model import XGBoostModel
 
-__all__ = ['LSTMModel']
+__all__ = ['XGBoostModel']

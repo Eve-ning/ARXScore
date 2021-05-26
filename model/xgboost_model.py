@@ -1,9 +1,8 @@
-import os
-from collections import Callable
+import pandas as pd
+from joblib import dump, load
 
 from dataclasses import dataclass, field
-from os import walk
-from typing import List
+from typing import List, Union
 
 from matplotlib import pyplot as plt
 from reamber.osu import OsuMap
@@ -18,14 +17,22 @@ from osrparse.mania import ManiaHitError
 import numpy as np
 
 
-@dataclass
 class XGBoostModel:
-    regressor: XGBRegressor
+    regressor: MultiOutputRegressor
     key: int
-    regressor_mul: MultiOutputRegressor = field(init=False)
+
+    def __init__(self,
+                 key:int,
+                 regressor:Union[XGBRegressor, MultiOutputRegressor]):
+        self.regressor = MultiOutputRegressor(regressor) if isinstance(regressor, XGBRegressor) else regressor
+        self.key = key
 
     def __post_init__(self):
-        self.regressor_mul = MultiOutputRegressor(self.regressor)
+        if isinstance(self.regressor, XGBRegressor):
+            # Cast Regressor as Multi if not already
+            self.regressor = MultiOutputRegressor(self.regressor)
+        else:
+            self.regressor = self.regressor
 
     @property
     def input_size(self): return CONSTS.INPUT_SIZE(self.key)
@@ -36,49 +43,69 @@ class XGBoostModel:
         """ Trains the model using the data generated. """
         if not isinstance(data, list):
             data = [data]
-        regressor_mul = MultiOutputRegressor(self.regressor)
         for ar in tqdm(data, desc="Training ... "):
-            regressor_mul.fit(
+            self.regressor.fit(
                 X=ar[..., :self.input_size],
                 y=ar[..., self.input_size:])
 
+
     def evaluate_model(self, data:List[np.ndarray], kfolds:int = 5):
-        data = np.hstack(data)
-        x, y = data[:, :self.input_size], data[:, self.input_size:]
+        data = np.vstack(data)
+        x, y = self.input(data), self.output(data)
         for train_ix, test_ix in KFold(n_splits=kfolds).split(data):
             x_train, x_test = x[train_ix], x[test_ix]
             y_train, y_test = y[train_ix], y[test_ix]
-            self.regressor_mul.fit(x_train, y_train)
-            y_pred = self.regressor_mul.predict(x_test)
+            self.regressor.fit(x_train, y_train, verbose=True)
+            y_pred = self.regressor.predict(x_test)
             print("MSE: ", np.mean((y_pred - y_test) ** 2))
 
     def predict(self, data:np.ndarray):
-        return self.regressor.predict(data[..., :self.input_size])
+        return self.regressor.predict(self.input(data))
 
     def evaluate(self, data:np.ndarray):
-        return np.mean((self.predict(data) - data[..., self.input_size]) ** 2)
+        return np.mean((self.predict(data) - self.input(data)) ** 2)
 
-    def predict_agg_and_plot(self, data:np.ndarray, map_path:str):
+    def input(self, data:np.ndarray):
+        return data[:, :self.input_size]
 
-        m = ManiaHitError.parse_map(OsuMap.readFile(map_path))
-        pred = self.predict(data[..., :self.input_size])
+    def output(self, data:np.ndarray):
+        return data[:, self.input_size:]
 
-        # Flattened Map
-        a = [i for k in m[:1] for j in k for i in j]
-
-        # Predicted
-        plt.subplot(3,1,1)
-        plt.plot(np.mean(pred.squeeze(), axis=1))
-
-        # Expected
-        plt.subplot(3,1,2)
-        plt.plot(np.mean(data.squeeze()[:,self.input_size:], axis=1))
-
-        # Density
-        plt.subplot(3,1,3)
-        plt.hist(a, bins=300)
-        plt.show()
+    def save(self, ver="0"):
+        dump(self.regressor, f'models/xgboost/xgboost{self.key}k_{ver}.joblib')
 
     @staticmethod
-    def model_path(key):
-        return CONSTS.MODEL_PATH + f'/estimator{key}'
+    def load(key, ver="0"):
+        regressor = load(f'models/xgboost/xgboost{key}k_{ver}.joblib')
+        return XGBoostModel(key, regressor)
+
+    def density(self, map_path:str):
+        er = ManiaHitError.parse_map(OsuMap.readFile(
+             f"{CONSTS.RSC_PATH}/{self.key}/{map_path}/{map_path}.osu"))
+        offsets = [*[i for j in er[0] for i in j], *[i for j in er[1] for i in j]]
+        df = pd.DataFrame(np.ones_like(offsets), index=offsets)
+        df.index = pd.to_datetime(df.index, unit='ms')
+        return df.groupby(pd.Grouper(freq=f'{1000}ms')).sum().to_numpy().squeeze()
+
+    def predict_and_plot(self, data:np.ndarray, map_path:str):
+        ax = plt.subplot(3, 1, 1)
+        plt.plot(self.predict(data), c='red', alpha=0.5)
+        ax.set_ylabel("Predicted")
+        ax = plt.subplot(3, 1, 2, sharey=ax, sharex=ax)
+        plt.plot(self.output(data), c='blue', alpha=0.5)
+        ax.set_ylabel("Actual")
+        ax = plt.subplot(3, 1, 3, sharex=ax)
+        plt.plot(self.density(map_path), c='black')
+        ax.set_ylabel("Density")
+
+    def predict_and_plot_agg(self, data:np.ndarray, map_path:str):
+        ax = plt.subplot(3, 1, 1)
+        plt.plot(np.mean(self.predict(data),axis=-1), c='red')
+        ax.set_ylabel("Predicted")
+        ax = plt.subplot(3, 1, 2, sharey=ax, sharex=ax)
+        plt.plot(np.mean(self.output(data),axis=-1), c='blue')
+        ax.set_ylabel("Actual")
+        ax = plt.subplot(3, 1, 3, sharex=ax)
+        plt.plot(self.density(map_path), c='black')
+        ax.set_ylabel("Density")
+

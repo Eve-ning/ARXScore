@@ -15,7 +15,7 @@ class Resource:
     window:int = CONSTS.WINDOW
     overwrite_data: bool = False
 
-    def features(self, keys:int, get_new_only=False, lim=None, ver="0") -> list:
+    def features(self, keys:int, get_new_only=False, lim=None, ver="0"):
         _, dirs, filenames = next(walk(f'{CONSTS.RSC_PATH}/{keys}'))
         trainables = []
         if lim: dirs = np.asarray(dirs)[np.random.choice(len(dirs), lim, replace=False)]
@@ -43,4 +43,4 @@ class Resource:
         if len(trainables) == 0:
             print("No new Data to get.")
 
-        return trainables
+        return trainables, dirs
