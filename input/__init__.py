@@ -1,3 +1,4 @@
-from input.input import Input
+from input.preprocessing import Preprocessing
+from input.resource import Resource
 
-__all__ = ['Input']
+__all__ = ['Preprocessing', 'Resource']

@@ -1,3 +1,3 @@
-from model.model import Model
+from model.lstm_model import LSTMModel
 
-__all__ = ['Model']
+__all__ = ['LSTMModel']

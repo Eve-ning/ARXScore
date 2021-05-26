@@ -2,6 +2,8 @@ from os import walk
 import os
 import re
 
+from reamber.osu import OsuMap
+
 UNSORTED_RSC_PATH = 'rsc_unsorted'
 SORTED_RSC_PATH = 'rsc'
 
@@ -11,7 +13,7 @@ def sort_rsc():
 
     _, _, filenames = next(walk(UNSORTED_RSC_PATH))
 
-    # %%
+    keys = []
     maps = []
     reps = []
     for f in filenames:
@@ -19,16 +21,17 @@ def sort_rsc():
         if ext == 'osr':
             reps.append(f)
         elif ext == 'osu':
+            m = OsuMap.readFile(UNSORTED_RSC_PATH + "/" + f)
+            keys.append(int(m.circleSize))
             maps.append(f)
 
-    # %%
-    for map in maps:
+    for k, map in zip(keys, maps):
         map_no_ext = map[:-4]
         if len(reps) == 0:
-            print("No Maps to Sort.")
+            print("No Replays to Sort.")
             break
-        dir     = f"{SORTED_RSC_PATH}/{map_no_ext}"
-        dir_rep = f"{SORTED_RSC_PATH}/{map_no_ext}/rep"
+        dir     = f"{SORTED_RSC_PATH}/{k}/{map_no_ext}"
+        dir_rep = f"{SORTED_RSC_PATH}/{k}/{map_no_ext}/rep"
         if not os.path.exists(dir):
             os.makedirs(dir)
         if not os.path.exists(dir_rep):
