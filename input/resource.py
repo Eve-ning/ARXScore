@@ -11,7 +11,7 @@ import numpy as np
 
 @dataclass
 class Resource:
-    threshold: int = CONSTS.THRESHOLD
+    threshold: int = CONSTS.NEIGHBOUR_THRESHOLD
     window:int = CONSTS.WINDOW
     overwrite_data: bool = False
 

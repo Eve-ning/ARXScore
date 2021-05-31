@@ -1,5 +1,4 @@
-from collections import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from os import walk
 
 import numpy as np
@@ -9,6 +8,7 @@ import pandas as pd
 from _lzma import LZMAError
 from reamber.osu import OsuMap
 from scipy.stats import moment
+from sklearn.preprocessing import robust_scale
 from tqdm import tqdm
 
 from consts import CONSTS
@@ -27,7 +27,7 @@ class Preprocessing:
 
     """
     keys: int
-    neighbour_threshold: int = CONSTS.THRESHOLD
+    neighbour_threshold: int = CONSTS.NEIGHBOUR_THRESHOLD
     smooth_size: int = CONSTS.SMOOTH_SIZE
     window_ms: float = CONSTS.WINDOW
     _INCLUDE_LN: bool = CONSTS.INCLUDE_LN_AS_START_COMBO
@@ -45,23 +45,17 @@ class Preprocessing:
 
         map = OsuMap.readFile(f"{map_path}/{map_str}.osu")
         features = np.nan_to_num(self._make_features(reps, map))
-        return self._standardize_by_chunks(features)
+        return features
+    
+    def map_features(self, map_path):
+        map = OsuMap.readFile(map_path)
+        errors = ManiaHitError([], map).errors()
+        return self._map_features(errors=errors)
 
     def _make_features(self, reps, map):
         errors = ManiaHitError(reps, map).errors()
-
-        map = [*[np.asarray(h) for h in errors.hit_map],
-               *[np.asarray(h) for h in errors.rel_map]]
-
-        df_map_features = self._map_features(map)
-
-        if reps:
-            df_rep_error = self._rep_error(errors)
-            df = pd.concat([df_map_features, df_rep_error], axis=1)
-
-        else:
-            df = df_map_features
-
+        df_in = self._map_features(errors)
+        df = pd.concat([df_in, self._rep_error(errors)], axis=1) if reps else df_in
         return df.to_numpy()
 
     def _rep_error(self, errors):
@@ -94,68 +88,111 @@ class Preprocessing:
                     # We append this as the error per key
                     error_k.append(pd.DataFrame(ar,index=df.index))
 
-        return self._rearrange_errors(pd.concat(error_k,axis=1))
+        return self._scale_output(self._rearr_output(pd.concat(error_k, axis=1).fillna(0)))
 
-    def _map_features(self, map):
-        # We strictly do not render the Release -> Any combination.
-        CANDIDATES = self.keys * 2 if CONSTS.INCLUDE_LN_AS_START_COMBO else self.keys
-        diffs = []
-        for from_i in tqdm(range(CANDIDATES), desc="Feature Calculation Progress"):
-            # We have the first column as the offset
-            b = np.zeros([CANDIDATES * CONSTS.MOMENTS + 1, len(map[from_i])])
-            b[0] = map[from_i]
-            for to_i in range(CANDIDATES):
-                a = np.abs(map[from_i] - map[to_i][..., None])
-                a = np.where(a < CONSTS.THRESHOLD, 1 / (1 + a / 300), np.nan)
-                # b[to_i * CONSTS.MOMENTS + 1] = np.count_nonzero(~np.isnan(a),axis=0)
-                b[to_i * CONSTS.MOMENTS + 1] = np.nansum(a, axis=0)
-                b[to_i * CONSTS.MOMENTS + 2] = moment(a, 2, nan_policy='omit', axis=0)
-                b[to_i * CONSTS.MOMENTS + 3] = moment(a, 3, nan_policy='omit', axis=0)
-                b[to_i * CONSTS.MOMENTS + 4] = moment(a, 4, nan_policy='omit', axis=0)
-            b = pd.DataFrame(b.transpose()).set_index(0)
-            b.index = pd.to_datetime(b.index, unit='ms')
+    def _map_features(self, errors):
+        map = [*[np.asarray(h) for h in errors.hit_map],
+               *[np.asarray(h) for h in errors.rel_map]]
+        
+        INPUTS = self.keys * 2
+        features = []
+        col_names = []
+        for from_i in tqdm(range(INPUTS), desc="Feature Calculation Progress"):
+            features_k = np.zeros([INPUTS * CONSTS.FEATURE_PER_COMBO, len(map[from_i])])
+            for to_i in range(INPUTS):
+                diff_k = np.abs(map[from_i] - map[to_i][..., None])
+                diff_k = np.where(diff_k < CONSTS.NEIGHBOUR_THRESHOLD,
+                                  1 / (1 + diff_k / CONSTS.DIFF_CORRECTION_FACTOR), np.nan)
 
-            # If key = 4 from = 0
-            # 0: Count of 0 -> 0 | 4: Count of 0 -> 1 ...
-            # 1: M1 of    0 -> 0 | 5: M1 of    0 -> 1
-            # 2: M2 of    0 -> 0 | 6: M2 of    0 -> 1
-            # 3: M3 of    0 -> 0 | 7: M3 of    0 -> 1
+                if from_i == to_i:
+                    # Do not include itself as a match.
+                    np.fill_diagonal(diff_k, np.nan)
 
-            # Thus if Key = 4 and No LN, we expect 16 features per key
-            b = b.groupby(pd.Grouper(freq=f'{CONSTS.WINDOW}ms')).sum()
-            diffs.append(b)
-        df = pd.concat(diffs, axis=1).fillna(0)
-        return self._rearrange_moments(df)
+                all_nan_slices = np.all(np.isnan(diff_k),axis=0)
+                diff_k[:, all_nan_slices] = 0
+                # NEAREST ONLY
+                try:
+                    features_k[to_i * CONSTS.FEATURE_PER_COMBO + 0] = np.nanmax(diff_k, axis=0)
+                except ValueError:
+                    features_k[to_i * CONSTS.FEATURE_PER_COMBO + 0] = 0
+                col_names.append(f"{from_i}_{to_i}max")
+                # SUM
+                features_k[to_i * CONSTS.FEATURE_PER_COMBO + 1] = np.nansum(diff_k, axis=0)
+                col_names.append(f"{from_i}_{to_i}sum")
+                # MEAN
+                features_k[to_i * CONSTS.FEATURE_PER_COMBO + 2] = moment(diff_k, 2, nan_policy='omit', axis=0)
+                col_names.append(f"{from_i}_{to_i}mean")
+                # VAR
+                features_k[to_i * CONSTS.FEATURE_PER_COMBO + 3] = moment(diff_k, 3, nan_policy='omit', axis=0)
+                col_names.append(f"{from_i}_{to_i}var")
+                # SKEW
+                features_k[to_i * CONSTS.FEATURE_PER_COMBO + 4] = moment(diff_k, 4, nan_policy='omit', axis=0)
+                col_names.append(f"{from_i}_{to_i}skew")
+            features_k = pd.DataFrame(features_k.transpose(), index=map[from_i])
+            # noinspection PyTypeChecker
+            features_k.index = pd.to_datetime(features_k.index, unit='ms')
 
-    def _rearrange_moments(self, df):
+            features_k = features_k.groupby(pd.Grouper(freq=f'{CONSTS.WINDOW}ms')).sum()
+            features.append(features_k)
+        df = pd.concat(features, axis=1).fillna(0)
+        df.columns = col_names
+        return self._scale_input(self._rearr_input(df))
+
+    @staticmethod
+    def feature_names(keys):
+        OUTPUTS = keys * 2
+        col_names = []
+        for from_i in range(OUTPUTS):
+            for to_i in range(OUTPUTS):
+                col_names.append(f"{from_i}_{to_i}max")
+                col_names.append(f"{from_i}_{to_i}sum")
+                col_names.append(f"{from_i}_{to_i}mean")
+                col_names.append(f"{from_i}_{to_i}var")
+                col_names.append(f"{from_i}_{to_i}skew")
+        return col_names
+
+    def _rearr_input(self, df):
         # This complex function swaps the columns so that the moments are all together
-        return df.iloc[:, (np.r_[[np.arange(i, self._input_size, CONSTS.MOMENTS)
-                  for i in range(CONSTS.MOMENTS)]].flatten())]
+        return df.iloc[:, (np.r_[[np.arange(i, self._input_size * 4, CONSTS.FEATURE_PER_COMBO)
+                                  for i in range(CONSTS.FEATURE_PER_COMBO)]].flatten())]
 
-    def _rearrange_errors(self, df):
+    def _rearr_output(self, df):
         # This complex function swaps the columns so that the hit and rel are together
         return df.iloc[:,(np.r_[[np.arange(i, self._output_size, 2) for i in range(2)]]).flatten()]
 
-    def _standardize_by_chunks(self, ar):
-        # The fences define where the chunks should slice
-        fences = [*np.arange(0, self._input_size, self.keys ** 2),
-                  *(np.arange(0, self._output_size, self.keys) + self._input_size),
-                  ar.shape[-1]]
+    def _scale_input(self, df):
+        fences = np.arange(0, self._input_size * 4 + self.keys ** 2, self.keys ** 2)
         for a, b in zip(fences[:-1], fences[1:]):
-            chunk = ar[...,a:b]
-            min, max = chunk.min(), chunk.max()
-            if max - min == 0:
-                ar[..., a:b] = (chunk - min)
-            else:
-                ar[..., a:b] = (chunk - min) / (max - min)
+            df.iloc[:, a:b] = self._scale_chunk(df.iloc[:, a:b],
+                                                method_=CONSTS.CHUNK_SCALING_METHOD[0])
+        return df
 
-        return ar
+    def _scale_output(self, df):
+        fences = np.arange(0, self._output_size + self.keys, self.keys)
+
+        for a, b in zip(fences[:-1], fences[1:]):
+            df.iloc[:, a:b] = self._scale_chunk(df.iloc[:, a:b],
+                                                method_=CONSTS.CHUNK_SCALING_METHOD[1])
+        return df
+
+    @staticmethod
+    def _scale_chunk(chunk, method_):
+        if method_ == 'minmax':
+            # noinspection PyShadowingBuiltins
+            min, max = np.min(chunk.to_numpy()), np.max(chunk.to_numpy())
+            if max - min == 0: return (chunk - min)
+            else:              return (chunk - min) / (max - min)
+        elif method_ == 'std':
+            mean, var = np.mean(chunk.to_numpy()), np.var(chunk.to_numpy())
+            if var == 0: return (chunk - mean)
+            else:        return (chunk - mean) / var
+        elif method_ == 'robust':
+            return robust_scale(chunk.flatten(), unit_variance=True).reshape(chunk.shape)
 
     @property
     def _input_size(self):
-        return self.keys ** 2 * CONSTS.MOMENTS
+        return self.keys ** 2 * CONSTS.FEATURE_PER_COMBO
 
     @property
     def _output_size(self):
         return self.keys * 2
-

@@ -23,7 +23,7 @@ from tensorflow import keras
 class LSTMModel:
     regressor: keras.Model
     key: int
-    threshold: int = CONSTS.THRESHOLD
+    threshold: int = CONSTS.NEIGHBOUR_THRESHOLD
     window:int = CONSTS.WINDOW
     epochs:int = CONSTS.EPOCHS
     batch_size:int = CONSTS.BATCH_SIZE
@@ -61,7 +61,7 @@ class LSTMModel:
     @staticmethod
     def _features(key):
         # Keys ^ 2 * Moments *
-        return key ** 2 * CONSTS.MOMENTS
+        return key ** 2 * CONSTS.FEATURE_PER_COMBO
 
     @staticmethod
     def _output(key):

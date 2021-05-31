@@ -8,10 +8,11 @@ class CONSTS:
     DATA_NAME = "data"
     REP_NAME = "rep"
     MODEL_PATH = "models"
-    MOMENTS = 4
+    FEATURE_PER_COMBO = 5
 
-    THRESHOLD = 2000
+    NEIGHBOUR_THRESHOLD = 2000
     EPOCHS = 50
+    DIFF_CORRECTION_FACTOR = 300
 
     BATCH_SIZE = 48
     WINDOW = 1000
@@ -25,9 +26,11 @@ class CONSTS:
     # This means to include LN as starting combinations for pattern processing
     INCLUDE_LN_AS_START_COMBO = False
 
+    CHUNK_SCALING_METHOD = ('minmax', 'minmax')
+
     @staticmethod
     def INPUT_SIZE(key):
-        return key ** 2 * CONSTS.MOMENTS
+        return (key * 2) ** 2 * CONSTS.FEATURE_PER_COMBO
     @staticmethod
     def OUTPUT_SIZE(key):
         return key * 2
