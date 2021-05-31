@@ -7,3 +7,4 @@ _rsc/
 rsc_data/
 rsc_unsorted/
 scratch*
+.journal/
