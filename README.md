@@ -76,3 +76,9 @@ I did think about having many people to help me retrieve replays,
 but why waste 10000 hours of mundane work when I can ask the
 developer to do an SQL query?
 
+## Journal
+
+The journal can be found [Here](journal.pdf). It contains most of my 
+important notes here. It's a bit messy since I didn't have time to do
+diagrams, however, I can explain it if you need the information for
+your project.
