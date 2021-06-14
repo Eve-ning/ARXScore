@@ -2,7 +2,6 @@
 *.osr
 *.osu
 *.pyc
-models/
 _rsc/
 rsc_data/
 rsc_unsorted/
