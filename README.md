@@ -22,13 +22,22 @@ you get a decent estimator of difficulty.
 
 Hence, this is the same, but we skip (2).
 
+### Output?
+
+The predict output is a `(windows, features=8)` array.
+
+Each feature is an "independent" estimator for the combined final result
+in ``predict_and_plot_agg``.
+
+In simpler words, it outputs the difficulty of the map at timestamps.
+
+It's up to the game developer to find the right choice of aggregation.
+
 ## Template
 
 If you want to use the predicted value, you can use ``model.predict``
 
-This will return a `(windows, features=8)` array.
-Each feature is an "independent" estimator for the combined final result
-in ``predict_and_plot_agg``.
+
 
 ### Absolute Difficulty
 
