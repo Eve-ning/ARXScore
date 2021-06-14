@@ -95,7 +95,7 @@ class LSTMModel:
                 print(f"Generating Data and Training on {map_dir}")
                 data = Preprocessing(self.threshold, self.window,
                                      aggregated=self.aggregated,
-                                     aggregation_method=self.aggregation_method).load_from(map_dir)
+                                     aggregation_method=self.aggregation_method).features_from_rsc(map_dir)
                 np.save(data_path, data)
                 trainables.append(data)
             elif retrain:

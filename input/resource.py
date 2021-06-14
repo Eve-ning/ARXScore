@@ -12,7 +12,8 @@ import numpy as np
 @dataclass
 class Resource:
     threshold: int = CONSTS.NEIGHBOUR_THRESHOLD
-    window:int = CONSTS.WINDOW
+    window: int = CONSTS.WINDOW
+    scale: bool = False
     overwrite_data: bool = False
 
     def features(self, keys:int, get_new_only=False, lim=None, ver="0"):
@@ -31,7 +32,8 @@ class Resource:
                 if not os.path.exists(data_dir):
                     os.makedirs(data_dir)
                 print(f"Generating Data on {map_dir}")
-                data = Preprocessing(keys, self.threshold, self.window).load_from(map_dir)
+                data = Preprocessing(keys, self.scale, self.threshold, self.window)\
+                    .features_from_rsc(map_dir)
                 np.save(data_path, data)
                 trainables.append(data)
             elif not get_new_only:
